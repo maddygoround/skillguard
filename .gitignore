@@ -1,0 +1,14 @@
+.DS_Store
+*.pyc
+__pycache__/
+
+# Generated promptfoo artifacts
+promptfooconfig.yaml
+results/
+
+# Local promptfoo logs
+.promptfoo/
+
+# Editor/system noise
+.idea/
+.vscode/
