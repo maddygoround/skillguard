@@ -14,3 +14,8 @@ results/
 .vscode/
 
 .promptfoo-prompts/
+
+# Python packaging
+*.egg-info/
+dist/
+build/
