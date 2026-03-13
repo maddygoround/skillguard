@@ -12,3 +12,5 @@ results/
 # Editor/system noise
 .idea/
 .vscode/
+
+.promptfoo-prompts/

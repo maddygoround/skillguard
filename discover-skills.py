@@ -7,7 +7,8 @@ frontmatter and content, runs a static security scan on each, and
 auto-generates a promptfooconfig.yaml ready for redteam evaluation.
 
 Usage:
-    python3 discover-skills.py [--skills-root PATH] [--host-skills-root PATH] [--output PATH] [--provider ID]
+    python3 discover-skills.py [--skills-root PATH] [--host-skills-root PATH] [--output PATH]
+                               [--target-provider ID ...] [--redteam-provider ID]
 
 Environment variables (override defaults):
     SKILLS_ROOT       Path to the skills directory used for discovery (default: auto-detected)
@@ -15,7 +16,9 @@ Environment variables (override defaults):
                       Defaults to SKILLS_ROOT. Set this when running from inside a VM/container
                       so the generated paths point to the real host filesystem.
     PROMPTFOO_CONFIG  Path to write the config file  (default: promptfooconfig.yaml)
-    LLM_PROVIDER      promptfoo provider string       (default: anthropic:claude-sonnet-4-6)
+    TARGET_PROVIDERS  Comma-separated target providers to test (default: anthropic:claude-haiku-4-5-latest)
+    LLM_PROVIDER      Backward-compatible single target provider override
+    REDTEAM_PROVIDER  Optional attacker/grader provider for redteam generation
 """
 
 import os
@@ -39,9 +42,16 @@ SCRIPT_DIR   = Path(__file__).resolve().parent
 DEFAULT_SKILLS_ROOT = os.path.expanduser("~/.skills/skills")
 DEFAULT_OUTPUT      = str(SCRIPT_DIR / "promptfooconfig.yaml")
 DEFAULT_PROVIDER    = "anthropic:claude-haiku-4-5-latest"
+DEFAULT_TARGET_PROVIDERS = (
+    os.environ.get("TARGET_PROVIDERS")
+    or os.environ.get("LLM_PROVIDER")
+    or DEFAULT_PROVIDER
+)
+DEFAULT_REDTEAM_PROVIDER = os.environ.get("REDTEAM_PROVIDER", "")
 DEFAULT_PLUGIN_PRESET = os.environ.get("REDTEAM_PLUGIN_PRESET", "technical-minimal")
 DEFAULT_STRATEGY_PRESET = os.environ.get("REDTEAM_STRATEGY_PRESET", "technical-minimal")
 DEFAULT_DEDUPE_MODE = os.environ.get("DEDUPE_MODE", "content")
+GENERATED_PROMPTS_DIRNAME = ".promptfoo-prompts"
 
 # HOST_SKILLS_ROOT: the path written into the YAML for promptfoo to resolve.
 # Defaults to SKILLS_ROOT (same machine). Override when running inside a VM/container.
@@ -467,8 +477,10 @@ def run_static_analysis(skills: list[dict]) -> list[dict]:
     return all_findings
 
 
-def build_promptfoo_config(skills: list[dict], provider: str, num_tests: int,
+def build_promptfoo_config(skills: list[dict], target_providers: list[str], num_tests: int,
                            plugins: list[dict], strategies: list[dict],
+                           redteam_provider: str | None,
+                           output_path: str,
                            discovery_root: str = "", host_root: str = "",
                            plugin_preset: str = "", strategy_preset: str = "",
                            dedupe_mode: str = "off", duplicates: list[dict] | None = None,
@@ -490,17 +502,42 @@ def build_promptfoo_config(skills: list[dict], provider: str, num_tests: int,
             raw_path = raw_path.replace(discovery_root, host_root, 1)
         return raw_path
 
-    targets = []
-    for skill in skills:
-        targets.append({
-            "id":    provider,
-            "label": f"skill:{skill['id']}",
-            "config": {
-                # Reference the SKILL.md file directly – keeps the YAML clean
-                # and ensures the latest version is always used at test time.
-                "systemPrompt": f"file://{host_path(skill['path'])}",
+    prompts_dir = Path(output_path).resolve().parent / GENERATED_PROMPTS_DIRNAME
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    prompts = []
+    prompt_files = {}
+    for index, skill in enumerate(skills, start=1):
+        raw_prompt = Path(skill["path"]).read_text(encoding="utf-8", errors="replace")
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", skill["id"]).strip("-") or f"skill-{index}"
+        prompt_path = prompts_dir / f"{index:03d}-{safe_name}.json"
+        prompt_payload = [
+            {
+                "role": "system",
+                "content": raw_prompt,
             },
+            {
+                "role": "user",
+                "content": "{{prompt}}",
+            },
+        ]
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            json.dump(prompt_payload, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+
+        prompt_files[skill["id"]] = str(prompt_path)
+        prompts.append({
+            "id": f"file://{prompt_path}",
+            "label": f"skill:{skill['id']}",
         })
+
+    targets = [
+        {
+            "id": provider_id,
+            "label": f"provider:{provider_id}",
+        }
+        for provider_id in target_providers
+    ]
 
     config = {
         "description": (
@@ -508,9 +545,11 @@ def build_promptfoo_config(skills: list[dict], provider: str, num_tests: int,
             f"{len(skills)} skills discovered. "
             f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
         ),
+        "prompts": prompts,
         "targets": targets,
         "redteam": {
             "purpose": REDTEAM_PURPOSE,
+            "injectVar": "prompt",
             "numTests":  num_tests,
             "plugins":   plugins,
             "strategies": strategies,
@@ -522,18 +561,28 @@ def build_promptfoo_config(skills: list[dict], provider: str, num_tests: int,
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "skills_root":  host_root,
             "skill_count":  len(skills),
+            "target_providers": target_providers,
+            "redteam_provider": redteam_provider or "",
             "plugin_preset": plugin_preset,
             "strategy_preset": strategy_preset,
             "dedupe_mode": dedupe_mode,
             "deduplicated_count": len(duplicates),
             "filtered_strategies": filtered_strategies,
+            "generated_prompt_dir": str(prompts_dir),
             "duplicates": duplicates,
             "skills": [
-                {"id": s["id"], "name": s["name"], "path": host_path(s["path"])}
+                {
+                    "id": s["id"],
+                    "name": s["name"],
+                    "path": host_path(s["path"]),
+                    "prompt_path": prompt_files[s["id"]],
+                }
                 for s in skills
             ],
         },
     }
+    if redteam_provider:
+        config["redteam"]["provider"] = redteam_provider
     return config
 
 
@@ -629,7 +678,15 @@ def main():
                              "promptfoo). Defaults to --skills-root. Set this when discovering "
                              "inside a VM/container but running promptfoo on the host.")
     parser.add_argument("--output",      default=os.environ.get("PROMPTFOO_CONFIG", DEFAULT_OUTPUT))
-    parser.add_argument("--provider",    default=os.environ.get("LLM_PROVIDER", DEFAULT_PROVIDER))
+    parser.add_argument("--target-provider", "--provider",
+                        action="append",
+                        dest="target_providers",
+                        default=None,
+                        help=("Target provider under test. Repeat the flag or pass a comma-separated "
+                              "list to test multiple providers."))
+    parser.add_argument("--redteam-provider",
+                        default=DEFAULT_REDTEAM_PROVIDER,
+                        help="Optional attacker/grader provider for redteam generation.")
     parser.add_argument("--num-tests",   type=int, default=10)
     parser.add_argument("--plugin-preset", default=DEFAULT_PLUGIN_PRESET,
                         help="Plugin preset: balanced, security-focused, minimal")
@@ -647,6 +704,13 @@ def main():
                         help="Deduplicate repeated skills by: off, content, name")
     args = parser.parse_args()
 
+    raw_target_providers = args.target_providers if args.target_providers is not None else [DEFAULT_TARGET_PROVIDERS]
+    target_providers = []
+    for value in raw_target_providers:
+        target_providers.extend(parse_csv(value))
+    if not target_providers:
+        target_providers = [DEFAULT_PROVIDER]
+
     # Resolve host root: explicit arg > env > fall back to skills-root
     host_root = args.host_skills_root or args.skills_root
 
@@ -656,7 +720,8 @@ def main():
     print(f"  Skills root (discovery) : {args.skills_root}")
     print(f"  Skills root (host/YAML) : {host_root}")
     print(f"  Output                  : {args.output}")
-    print(f"  Provider                : {args.provider}")
+    print(f"  Target providers        : {', '.join(target_providers)}")
+    print(f"  Redteam provider        : {args.redteam_provider or '(default promptfoo attacker/grader)'}")
     print(f"  Num tests               : {args.num_tests} per skill")
     print(f"  Plugin preset           : {args.plugin_preset}")
     print(f"  Strategy preset         : {args.strategy_preset}")
@@ -699,9 +764,11 @@ def main():
             print(f"     - {item['id']}: {item['reason']}")
         print()
 
-    config = build_promptfoo_config(skills, args.provider, args.num_tests,
+    config = build_promptfoo_config(skills, target_providers, args.num_tests,
                                     plugins=plugins,
                                     strategies=strategies,
+                                    redteam_provider=args.redteam_provider or None,
+                                    output_path=args.output,
                                     discovery_root=args.skills_root,
                                     host_root=host_root,
                                     plugin_preset=args.plugin_preset,

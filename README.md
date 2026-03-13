@@ -39,7 +39,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 # Or OpenAI
 export OPENAI_API_KEY=sk-...
-export LLM_PROVIDER=openai:gpt-4o
+export TARGET_PROVIDERS=openai:gpt-4o
+
+# Optional: separate attacker/grader model for redteam generation
+export REDTEAM_PROVIDER=openai:chat:gpt-5-mini
 ```
 
 ### 4. (Optional) File-watcher for `watch-skills.sh`
@@ -69,7 +72,9 @@ You can also override settings directly with CLI flags:
 ./run-redteam.sh \
   --skills-root "$HOME/.claude" \
   --host-skills-root "$HOME/.claude" \
-  --provider anthropic:claude-sonnet-4-6 \
+  --target-provider anthropic:claude-sonnet-4-6 \
+  --target-provider openai:chat:gpt-5.4 \
+  --redteam-provider openai:chat:gpt-5-mini \
   --num-tests 5 \
   --strategy-preset local-balanced
 ```
@@ -102,7 +107,9 @@ A 10-second cooldown prevents duplicate runs from rapid-fire saves.
 | `SKILLS_ROOT` | `~/.claude/` | Root directory scanned for `SKILL.md` files |
 | `HOST_SKILLS_ROOT` | `SKILLS_ROOT` | Path written into `promptfooconfig.yaml` when discovery happens in a different mount/container path |
 | `PROMPTFOO_CONFIG` | `./promptfooconfig.yaml` | Output config path |
-| `LLM_PROVIDER` | `anthropic:claude-sonnet-4-6` | promptfoo provider string |
+| `TARGET_PROVIDERS` | `anthropic:claude-sonnet-4-6` | Comma-separated list of providers under test |
+| `LLM_PROVIDER` | same as `TARGET_PROVIDERS` | Backward-compatible single target provider override |
+| `REDTEAM_PROVIDER` | _(unset)_ | Optional attacker/grader provider used for redteam generation and grading |
 | `NUM_TESTS` | `10` | Number of attack probes per skill |
 | `PROMPTFOO_VERSION` | `latest` | Promptfoo version to run via `npx promptfoo@...` |
 | `REDTEAM_PLUGIN_PRESET` | `technical-minimal` | Plugin bundle: `technical-minimal`, `technical-core`, `balanced`, `security-focused`, or `minimal` |
@@ -219,7 +226,7 @@ actual install-safety policy rather than a broad, abstract notion of "security r
 # Use CLI flags instead of env vars
 ./run-redteam.sh \
   --skills-root "$HOME/.claude" \
-  --provider openai:gpt-4o \
+  --target-provider openai:gpt-4o \
   --num-tests 3
 
 # Default small-footprint setup

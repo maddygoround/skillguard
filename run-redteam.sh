@@ -4,8 +4,8 @@
 #
 #  Usage:
 #    ./run-redteam.sh
-#    ./run-redteam.sh --skills-root /path/to/skills --provider openai:gpt-4o
-#    SKILLS_ROOT=/path/to/skills LLM_PROVIDER=openai:gpt-4o ./run-redteam.sh
+#    ./run-redteam.sh --skills-root /path/to/skills --target-provider openai:gpt-4o
+#    SKILLS_ROOT=/path/to/skills TARGET_PROVIDERS=openai:gpt-4o,anthropic:claude-sonnet-4-6 ./run-redteam.sh
 #
 #  Required env vars (set at least one API key):
 #    ANTHROPIC_API_KEY   – for anthropic:* providers
@@ -28,7 +28,8 @@ SKILLS_ROOT="${SKILLS_ROOT:-$HOME/.claude/}"
 # the mounted skills path differs from the path promptfoo sees on the host.
 HOST_SKILLS_ROOT="${HOST_SKILLS_ROOT:-$SKILLS_ROOT}"
 PROMPTFOO_CONFIG="${PROMPTFOO_CONFIG:-$SCRIPT_DIR/promptfooconfig.yaml}"
-LLM_PROVIDER="${LLM_PROVIDER:-anthropic:claude-sonnet-4-6}"
+TARGET_PROVIDERS="${TARGET_PROVIDERS:-${LLM_PROVIDER:-anthropic:claude-sonnet-4-6}}"
+REDTEAM_PROVIDER="${REDTEAM_PROVIDER:-}"
 NUM_TESTS="${NUM_TESTS:-10}"
 PROMPTFOO_VERSION="${PROMPTFOO_VERSION:-latest}"
 REDTEAM_PLUGIN_PRESET="${REDTEAM_PLUGIN_PRESET:-technical-minimal}"
@@ -46,7 +47,9 @@ Options:
   --skills-root PATH         Discovery root for SKILL.md files
   --host-skills-root PATH    Path written into promptfooconfig.yaml
   --config PATH              Output config path
-  --provider ID              Promptfoo provider, e.g. anthropic:claude-sonnet-4-6
+  --target-provider ID       Provider under test. Repeat flag for multiple targets
+  --provider ID              Backward-compatible alias for --target-provider
+  --redteam-provider ID      Optional attacker/grader provider for redteam generation
   --num-tests N              Number of tests per skill
   --promptfoo-version VER    Promptfoo version for npx promptfoo@VER
   --plugin-preset NAME       Plugin preset: technical-minimal, technical-core, balanced, security-focused, minimal
@@ -57,6 +60,8 @@ Options:
 Environment variables remain supported and are used as defaults.
 EOF
 }
+
+TARGET_PROVIDER_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -75,9 +80,14 @@ while [[ $# -gt 0 ]]; do
       PROMPTFOO_CONFIG="$2"
       shift 2
       ;;
-    --provider|--llm-provider)
+    --target-provider|--provider|--llm-provider)
       [[ $# -ge 2 ]] || { echo "[ERROR] --provider requires a value."; exit 1; }
-      LLM_PROVIDER="$2"
+      TARGET_PROVIDER_ARGS+=("$2")
+      shift 2
+      ;;
+    --redteam-provider)
+      [[ $# -ge 2 ]] || { echo "[ERROR] --redteam-provider requires a value."; exit 1; }
+      REDTEAM_PROVIDER="$2"
       shift 2
       ;;
     --num-tests)
@@ -118,13 +128,34 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ ${#TARGET_PROVIDER_ARGS[@]} -gt 0 ]]; then
+  TARGET_PROVIDERS="$(IFS=,; echo "${TARGET_PROVIDER_ARGS[*]}")"
+fi
+
+IFS=',' read -r -a TARGET_PROVIDER_LIST <<< "$TARGET_PROVIDERS"
+
+require_api_key_for_provider() {
+  local provider="$1"
+  [[ -n "$provider" ]] || return 0
+  if [[ "$provider" == anthropic:* && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+    echo -e "${RED}[ERROR]${RESET} ANTHROPIC_API_KEY is not set for provider $provider."
+    echo "         Export it: export ANTHROPIC_API_KEY=sk-ant-..."
+    exit 1
+  fi
+  if [[ "$provider" == openai:* && -z "${OPENAI_API_KEY:-}" ]]; then
+    echo -e "${RED}[ERROR]${RESET} OPENAI_API_KEY is not set for provider $provider."
+    exit 1
+  fi
+}
+
 banner
 echo -e " ${BOLD}promptfoo-redteam  ·  Skills Security Evaluator${RESET}"
 banner
 echo -e "  Skills root (discovery) : ${CYAN}$SKILLS_ROOT${RESET}"
 echo -e "  Skills root (host/YAML) : ${CYAN}$HOST_SKILLS_ROOT${RESET}"
 echo -e "  Config out              : ${CYAN}$PROMPTFOO_CONFIG${RESET}"
-echo -e "  Provider                : ${CYAN}$LLM_PROVIDER${RESET}"
+echo -e "  Target providers        : ${CYAN}$TARGET_PROVIDERS${RESET}"
+echo -e "  Redteam provider        : ${CYAN}${REDTEAM_PROVIDER:-"(default promptfoo attacker/grader)"}${RESET}"
 echo -e "  Num tests               : ${CYAN}$NUM_TESTS per skill${RESET}"
 echo -e "  Promptfoo version       : ${CYAN}$PROMPTFOO_VERSION${RESET}"
 echo -e "  Plugin preset           : ${CYAN}$REDTEAM_PLUGIN_PRESET${RESET}"
@@ -157,15 +188,10 @@ if ! npx "promptfoo@${PROMPTFOO_VERSION}" --version &>/dev/null 2>&1; then
 fi
 
 # API key
-if [[ "$LLM_PROVIDER" == anthropic:* && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo -e "${RED}[ERROR]${RESET} ANTHROPIC_API_KEY is not set."
-  echo "         Export it: export ANTHROPIC_API_KEY=sk-ant-..."
-  exit 1
-fi
-if [[ "$LLM_PROVIDER" == openai:* && -z "${OPENAI_API_KEY:-}" ]]; then
-  echo -e "${RED}[ERROR]${RESET} OPENAI_API_KEY is not set."
-  exit 1
-fi
+for provider in "${TARGET_PROVIDER_LIST[@]}"; do
+  require_api_key_for_provider "$provider"
+done
+require_api_key_for_provider "$REDTEAM_PROVIDER"
 echo -e "  ${GREEN}✓${RESET}  API key present"
 
 # Skills root
@@ -181,22 +207,32 @@ echo ""
 echo -e "${BOLD}── Step 1: Discover skills & generate promptfoo config ───────────${RESET}"
 
 set +e
+DISCOVER_CMD=(
+  python3 "$SCRIPT_DIR/discover-skills.py"
+  --skills-root "$SKILLS_ROOT"
+  --host-skills-root "$HOST_SKILLS_ROOT"
+  --output "$PROMPTFOO_CONFIG"
+  --num-tests "$NUM_TESTS"
+  --plugin-preset "$REDTEAM_PLUGIN_PRESET"
+  --strategy-preset "$REDTEAM_STRATEGY_PRESET"
+  --dedupe-mode "$DEDUPE_MODE"
+)
+if [[ -n "$REDTEAM_PROVIDER" ]]; then
+  DISCOVER_CMD+=(--redteam-provider "$REDTEAM_PROVIDER")
+fi
+for provider in "${TARGET_PROVIDER_LIST[@]}"; do
+  DISCOVER_CMD+=(--target-provider "$provider")
+done
+
 SKILLS_ROOT="$SKILLS_ROOT" \
 HOST_SKILLS_ROOT="$HOST_SKILLS_ROOT" \
 PROMPTFOO_CONFIG="$PROMPTFOO_CONFIG" \
-LLM_PROVIDER="$LLM_PROVIDER" \
+TARGET_PROVIDERS="$TARGET_PROVIDERS" \
+REDTEAM_PROVIDER="$REDTEAM_PROVIDER" \
 REDTEAM_PLUGIN_PRESET="$REDTEAM_PLUGIN_PRESET" \
 REDTEAM_STRATEGY_PRESET="$REDTEAM_STRATEGY_PRESET" \
 DEDUPE_MODE="$DEDUPE_MODE" \
-python3 "$SCRIPT_DIR/discover-skills.py" \
-  --skills-root "$SKILLS_ROOT" \
-  --host-skills-root "$HOST_SKILLS_ROOT" \
-  --output "$PROMPTFOO_CONFIG" \
-  --provider "$LLM_PROVIDER" \
-  --num-tests "$NUM_TESTS" \
-  --plugin-preset "$REDTEAM_PLUGIN_PRESET" \
-  --strategy-preset "$REDTEAM_STRATEGY_PRESET" \
-  --dedupe-mode "$DEDUPE_MODE"
+"${DISCOVER_CMD[@]}"
 DISCOVER_EXIT=$?
 set -e
 
