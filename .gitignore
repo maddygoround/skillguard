@@ -4,6 +4,7 @@ __pycache__/
 
 # Generated promptfoo artifacts
 promptfooconfig.yaml
+evalconfig.yaml
 results/
 
 # Local promptfoo logs

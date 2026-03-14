@@ -132,3 +132,43 @@ def run_promptfoo_view(promptfoo_version: str = "latest"):
     """Open the promptfoo interactive report viewer."""
     print(f"  Opening: {CYAN}npx promptfoo@{promptfoo_version} view{RESET}")
     subprocess.run(["npx", f"promptfoo@{promptfoo_version}", "view"])
+
+
+def run_promptfoo_eval(config_path: str, results_dir: str,
+                       promptfoo_version: str = "latest") -> int:
+    """Run promptfoo eval (quality evaluation, NOT redteam). Returns exit code."""
+    os.makedirs(results_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_file = os.path.join(results_dir, f"eval-{timestamp}.json")
+
+    print()
+    print(f"{BOLD}── Running promptfoo eval ────────────────────────────────────────{RESET}")
+    print(f"  Running: {CYAN}npx promptfoo@{promptfoo_version} eval --config {config_path}{RESET}")
+    print()
+
+    result = subprocess.run(
+        ["npx", f"promptfoo@{promptfoo_version}", "eval",
+         "--config", config_path,
+         "--output", results_file],
+    )
+    exit_code = result.returncode
+
+    # ── Summary ───────────────────────────────────────────────────────────
+    print()
+    banner()
+    print(f" {BOLD}Eval complete{RESET}")
+    banner()
+
+    if os.path.isfile(results_file):
+        print(f"  {GREEN}✓{RESET}  Results saved → {CYAN}{results_file}{RESET}")
+
+    print()
+    print("  View interactive report with improvement suggestions:")
+    print(f"    {BOLD}npx promptfoo@{promptfoo_version} view{RESET}")
+    print()
+    print("  Or open raw results:")
+    print(f"    {BOLD}cat {results_file} | python3 -m json.tool | less{RESET}")
+    banner()
+
+    return exit_code
+

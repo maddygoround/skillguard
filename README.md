@@ -110,9 +110,39 @@ Static security scan only — no promptfoo invocation.
 skillguard scan --skills-root ~/.claude
 ```
 
+### `skillguard eval`
+
+Quality evaluation with improvement suggestions — **completely separate from redteam**.
+
+Evaluates each skill across 5 quality dimensions (scope clarity, instruction safety, output constraints, edge case handling, completeness) using model-graded assertions. Improvement suggestions appear directly in the Promptfoo dashboard.
+
+```bash
+# Evaluate all skills across all dimensions
+skillguard eval --skills-root ~/.claude
+
+# Evaluate with a specific provider
+skillguard eval --skills-root ~/.claude --provider openai:gpt-4o
+
+# Evaluate only specific dimensions
+skillguard eval --dimensions scope_clarity,instruction_safety
+
+# Use a different grader model
+skillguard eval --grader-provider openai:gpt-4o
+```
+
+Eval-specific options:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--eval-config PATH` | `./evalconfig.yaml` | Output eval config path |
+| `--eval-provider ID` | `anthropic:claude-sonnet-4-6` | Target provider for evaluation |
+| `--grader-provider ID` | same as `--eval-provider` | LLM provider for grading |
+| `--dimensions DIMS` | all | Comma-separated quality dimensions |
+| `--num-tests N` | `5` | Tests per dimension |
+
 ### `skillguard view`
 
-Open the promptfoo interactive report viewer.
+Open the promptfoo interactive report viewer (works for both redteam and eval results).
 
 ```bash
 skillguard view

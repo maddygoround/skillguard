@@ -4,6 +4,7 @@ cli.py
 Main CLI entry point for SkillGuard. Provides subcommands:
   - discover  : Discover skills and generate promptfoo config
   - run       : Full pipeline — discover + static scan + redteam evaluation
+  - eval      : Quality evaluation with improvement suggestions (separate from redteam)
   - scan      : Static security scan only (no promptfoo)
   - view      : Open the promptfoo interactive report viewer
 """
@@ -38,9 +39,12 @@ from core.runner import (
     banner,
     preflight_checks,
     run_promptfoo,
+    run_promptfoo_eval,
     run_promptfoo_view,
     BOLD, CYAN, RESET, YELLOW, RED,
 )
+from core.evaluator import build_eval_config
+from core.graders import DIMENSIONS, DIMENSION_LABELS
 
 
 # ── Resolve output paths ────────────────────────────────────────────────────
@@ -318,6 +322,81 @@ def cmd_scan(args):
     banner()
 
 
+def cmd_eval(args):
+    """Handler for the `eval` subcommand — quality evaluation with suggestions."""
+    target_provider = args.eval_provider or DEFAULT_PROVIDER
+    grader_provider = args.grader_provider
+
+    # Parse dimensions
+    if args.dimensions:
+        dimensions = [d.strip() for d in args.dimensions.split(",") if d.strip()]
+        invalid = [d for d in dimensions if d not in DIMENSIONS]
+        if invalid:
+            valid_list = ", ".join(DIMENSIONS)
+            print(f"{RED}[ERROR]{RESET} Unknown dimensions: {', '.join(invalid)}")
+            print(f"        Valid dimensions: {valid_list}")
+            sys.exit(1)
+    else:
+        dimensions = list(DIMENSIONS)
+
+    banner()
+    print(f" {BOLD}SkillGuard  ·  Quality Evaluation{RESET}")
+    banner()
+    print(f"  Skills root     : {CYAN}{args.skills_root}{RESET}")
+    print(f"  Eval config     : {CYAN}{args.eval_config}{RESET}")
+    print(f"  Provider        : {CYAN}{target_provider}{RESET}")
+    print(f"  Grader provider : {CYAN}{grader_provider or '(same as provider)'}{RESET}")
+    print(f"  Dimensions      : {CYAN}{', '.join(dimensions)}{RESET}")
+    print(f"  Dedupe mode     : {CYAN}{args.dedupe_mode}{RESET}")
+    print()
+
+    # Preflight
+    preflight_checks(
+        target_providers=[target_provider],
+        redteam_provider=grader_provider or "",
+        skills_root=args.skills_root,
+        promptfoo_version=args.promptfoo_version,
+    )
+    print()
+
+    # Discover skills
+    from core.discover import discover_skills, dedupe_skills
+    print(f"{BOLD}── Discovering skills ───────────────────────────────────────────{RESET}")
+    skills = discover_skills(args.skills_root)
+    total_found = len(skills)
+    try:
+        skills, duplicates = dedupe_skills(skills, args.dedupe_mode)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"\n  Found {total_found} skill(s); keeping {len(skills)} after dedupe.\n")
+
+    if not skills:
+        print(f"{RED}[ERROR]{RESET} No skills found. Nothing to evaluate.")
+        sys.exit(1)
+
+    # Build eval config
+    print(f"{BOLD}── Generating eval config ───────────────────────────────────────{RESET}")
+    output_dir = str(Path(args.eval_config).parent)
+    config = build_eval_config(
+        skills=skills,
+        provider=target_provider,
+        num_tests=args.num_tests,
+        dimensions=dimensions,
+        grader_provider=grader_provider,
+        output_dir=output_dir,
+    )
+
+    from core.discover import write_config
+    write_config(config, args.eval_config)
+
+    # Run promptfoo eval
+    results_dir = str(Path(args.eval_config).parent / "results")
+    eval_exit = run_promptfoo_eval(args.eval_config, results_dir, args.promptfoo_version)
+
+    sys.exit(eval_exit)
+
+
 def cmd_view(args):
     """Handler for the `view` subcommand."""
     banner()
@@ -385,11 +464,68 @@ examples:
     _add_common_args(scan_parser)
     scan_parser.set_defaults(func=cmd_scan)
 
+    # ── eval ──────────────────────────────────────────────────────────────
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="Quality evaluation with improvement suggestions (separate from redteam)",
+        description=(
+            "Evaluate skill quality across multiple dimensions and surface "
+            "actionable improvement suggestions in the Promptfoo dashboard. "
+            "This is completely separate from the redteam pipeline."
+        ),
+    )
+    eval_parser.add_argument(
+        "--skills-root",
+        default=os.environ.get("SKILLS_ROOT", DEFAULT_SKILLS_ROOT),
+        help="Root directory to scan for SKILL.md files (default: %(default)s)",
+    )
+    eval_parser.add_argument(
+        "--eval-config",
+        default=os.environ.get("EVAL_CONFIG", str(Path.cwd() / "evalconfig.yaml")),
+        help="Output eval config file path (default: %(default)s)",
+    )
+    eval_parser.add_argument(
+        "--eval-provider", "--provider",
+        dest="eval_provider",
+        default=None,
+        help=f"Target provider for evaluation (default: {DEFAULT_PROVIDER})",
+    )
+    eval_parser.add_argument(
+        "--grader-provider",
+        default=None,
+        help="LLM provider for grading (default: same as --eval-provider)",
+    )
+    eval_parser.add_argument(
+        "--num-tests",
+        type=int,
+        default=int(os.environ.get("NUM_TESTS", "5")),
+        help="Number of tests per dimension (default: %(default)s)",
+    )
+    eval_parser.add_argument(
+        "--dimensions",
+        default=None,
+        help=(
+            "Comma-separated quality dimensions to evaluate. "
+            f"Available: {', '.join(DIMENSIONS)} (default: all)"
+        ),
+    )
+    eval_parser.add_argument(
+        "--dedupe-mode",
+        default=DEFAULT_DEDUPE_MODE,
+        help="Deduplicate skills by: content, name, or off (default: %(default)s)",
+    )
+    eval_parser.add_argument(
+        "--promptfoo-version",
+        default=os.environ.get("PROMPTFOO_VERSION", "latest"),
+        help="Promptfoo version for npx promptfoo@VER (default: %(default)s)",
+    )
+    eval_parser.set_defaults(func=cmd_eval)
+
     # ── view ──────────────────────────────────────────────────────────────
     view_parser = subparsers.add_parser(
         "view",
         help="Open the promptfoo interactive report viewer",
-        description="Launch the promptfoo web UI to view redteam results interactively.",
+        description="Launch the promptfoo web UI to view redteam or eval results interactively.",
     )
     view_parser.add_argument(
         "--promptfoo-version",
