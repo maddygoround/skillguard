@@ -39,9 +39,9 @@ def require_api_key_for_provider(provider: str):
         sys.exit(1)
 
 
-def preflight_checks(target_providers: list[str], redteam_provider: str,
-                     skills_root: str, promptfoo_version: str):
-    """Run all preflight checks: python3, npx, API keys, skills root."""
+def preflight_checks(target_providers: list[str], attacker_provider: str,
+                     location: str, promptfoo_version: str):
+    """Run all preflight checks: python3, npx, API keys, location."""
     print(f"{BOLD}── Preflight checks ──────────────────────────────────────────────{RESET}")
 
     # Python (we're already running, but verify version)
@@ -73,15 +73,15 @@ def preflight_checks(target_providers: list[str], redteam_provider: str,
     # API keys
     for provider in target_providers:
         require_api_key_for_provider(provider)
-    require_api_key_for_provider(redteam_provider)
+    require_api_key_for_provider(attacker_provider)
     print(f"  {GREEN}✓{RESET}  API key present")
 
-    # Skills root
-    if not os.path.isdir(skills_root):
-        print(f"{RED}[ERROR]{RESET} Skills root not found: {skills_root}")
-        print("         Set --skills-root or SKILLS_ROOT env var to the correct path.")
+    # Location
+    if not os.path.isdir(location):
+        print(f"{RED}[ERROR]{RESET} Location not found: {location}")
+        print("         Set --location or LOCATION env var.")
         sys.exit(1)
-    print(f"  {GREEN}✓{RESET}  Skills root exists")
+    print(f"  {GREEN}✓{RESET}  Location exists")
 
 
 def run_promptfoo(config_path: str, results_dir: str,

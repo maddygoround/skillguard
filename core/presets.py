@@ -7,23 +7,18 @@ redteam purpose, grader examples, cloud-required strategies, and defaults.
 
 import os
 
-# ── Defaults ─────────────────────────────────────────────────────────────────
-DEFAULT_SKILLS_ROOT = os.path.expanduser("~/.claude")
+DEFAULT_LOCATION = os.path.expanduser("~/.claude")
 DEFAULT_PROVIDER = "anthropic:claude-sonnet-4-6"
 DEFAULT_TARGET_PROVIDERS = (
     os.environ.get("TARGET_PROVIDERS")
     or os.environ.get("LLM_PROVIDER")
     or DEFAULT_PROVIDER
 )
-DEFAULT_REDTEAM_PROVIDER = os.environ.get("REDTEAM_PROVIDER", "")
+DEFAULT_ATTACKER_PROVIDER = os.environ.get("ATTACKER_PROVIDER", "")
 DEFAULT_PLUGIN_PRESET = os.environ.get("REDTEAM_PLUGIN_PRESET", "technical-minimal")
 DEFAULT_STRATEGY_PRESET = os.environ.get("REDTEAM_STRATEGY_PRESET", "technical-minimal")
 DEFAULT_DEDUPE_MODE = os.environ.get("DEDUPE_MODE", "content")
 GENERATED_PROMPTS_DIRNAME = ".promptfoo-prompts"
-
-# HOST_SKILLS_ROOT: the path written into the YAML for promptfoo to resolve.
-# Defaults to SKILLS_ROOT (same machine). Override when running inside a VM/container.
-DEFAULT_HOST_SKILLS_ROOT = os.environ.get("HOST_SKILLS_ROOT", "")
 
 
 # ── Redteam purpose ─────────────────────────────────────────────────────────

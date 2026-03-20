@@ -17,6 +17,8 @@ DIMENSIONS = [
     "output_constraints",
     "edge_case_handling",
     "completeness",
+    "tool_usage",
+    "context_behavior",
 ]
 
 # ── Shared preamble injected into every rubric ────────────────────────────────
@@ -136,6 +138,44 @@ System Prompt Under Review:
 """
 
 
+TOOL_USAGE_RUBRIC = f"""{_GRADER_PREAMBLE}
+
+DIMENSION: Tool Usage
+Evaluate whether the skill clearly defines which tools it uses, when to use them,
+and how to handle tool failures. It should explicitly restrict tools that are NOT needed.
+
+Scoring:
+  1.0  — Skill explicitly lists required tools, describes exactly when to use them, and handles failures
+  0.8  — Skill lists tools but only implies when to use them or lacks failure handling
+  0.6  — Skill mentions tools generally but lacks strict usage constraints
+  0.4  — Skill implies tool usage but doesn't explicitly restrict or define it
+  0.2  — Skill requires tools but provides no guidance on how to use them
+  0.0  — Skill uses tools dangerously without any constraints
+
+System Prompt Under Review:
+{{{{output}}}}
+"""
+
+CONTEXT_BEHAVIOR_RUBRIC = f"""{_GRADER_PREAMBLE}
+
+DIMENSION: Context Behavior
+Evaluate whether the skill explicitly defines its context execution behavior, especially 'context: fork'
+or isolation requirements if the skill operates on self-contained instructions. It should be clear if
+the skill needs parent context or should run isolated.
+
+Scoring:
+  1.0  — Skill clearly defines its context boundaries (e.g. 'context: fork') and explains its isolation logic
+  0.8  — Skill defines context boundaries but explanation of isolation is missing or brief
+  0.6  — Skill implies isolation or parent context dependency but doesn't explicitly state it
+  0.4  — Context behavior is ambiguous and could lead to context window clutter
+  0.2  — Skill seems to need isolation but has no context constraints
+  0.0  — Skill execution behavior is completely undefined regarding system context
+
+System Prompt Under Review:
+{{{{output}}}}
+"""
+
+
 # ── Rubric registry ──────────────────────────────────────────────────────────
 
 RUBRICS = {
@@ -144,6 +184,8 @@ RUBRICS = {
     "output_constraints": OUTPUT_CONSTRAINTS_RUBRIC,
     "edge_case_handling": EDGE_CASE_HANDLING_RUBRIC,
     "completeness":       COMPLETENESS_RUBRIC,
+    "tool_usage":         TOOL_USAGE_RUBRIC,
+    "context_behavior":   CONTEXT_BEHAVIOR_RUBRIC,
 }
 
 # Human-readable labels for each dimension (used in test descriptions)
@@ -153,4 +195,6 @@ DIMENSION_LABELS = {
     "output_constraints": "Output Constraints",
     "edge_case_handling": "Edge Case Handling",
     "completeness":       "Completeness",
+    "tool_usage":         "Tool Usage",
+    "context_behavior":   "Context Behavior",
 }

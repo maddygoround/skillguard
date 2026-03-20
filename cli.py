@@ -9,42 +9,45 @@ Main CLI entry point for SkillGuard. Provides subcommands:
   - view      : Open the promptfoo interactive report viewer
 """
 
+import argparse
 import os
 import sys
-import argparse
 from pathlib import Path
 
 from core import __version__
-from core.presets import (
-    DEFAULT_SKILLS_ROOT,
-    DEFAULT_PROVIDER,
-    DEFAULT_TARGET_PROVIDERS,
-    DEFAULT_REDTEAM_PROVIDER,
-    DEFAULT_PLUGIN_PRESET,
-    DEFAULT_STRATEGY_PRESET,
-    DEFAULT_DEDUPE_MODE,
-    DEFAULT_HOST_SKILLS_ROOT,
-)
 from core.discover import (
-    parse_csv,
-    discover_skills,
+    build_promptfoo_config,
     dedupe_skills,
+    discover_skills,
+    parse_csv,
     resolve_plugin_set,
     resolve_strategy_set,
-    build_promptfoo_config,
     write_config,
 )
-from core.scanner import run_static_analysis, write_static_report
+from core.evaluator import build_eval_config
+from core.graders import DIMENSION_LABELS, DIMENSIONS
+from core.presets import (
+    DEFAULT_ATTACKER_PROVIDER,
+    DEFAULT_DEDUPE_MODE,
+    DEFAULT_LOCATION,
+    DEFAULT_PLUGIN_PRESET,
+    DEFAULT_PROVIDER,
+    DEFAULT_STRATEGY_PRESET,
+    DEFAULT_TARGET_PROVIDERS,
+)
 from core.runner import (
+    BOLD,
+    CYAN,
+    RED,
+    RESET,
+    YELLOW,
     banner,
     preflight_checks,
     run_promptfoo,
     run_promptfoo_eval,
     run_promptfoo_view,
-    BOLD, CYAN, RESET, YELLOW, RED,
 )
-from core.evaluator import build_eval_config
-from core.graders import DIMENSIONS, DIMENSION_LABELS
+from core.scanner import run_static_analysis, write_static_report
 
 
 # ── Resolve output paths ────────────────────────────────────────────────────
@@ -56,33 +59,31 @@ def _default_config_path() -> str:
 def _add_common_args(parser: argparse.ArgumentParser):
     """Add flags shared by discover, run, and scan subcommands."""
     parser.add_argument(
-        "--skills-root",
-        default=os.environ.get("SKILLS_ROOT", DEFAULT_SKILLS_ROOT),
-        help="Root directory to scan for SKILL.md files (default: %(default)s)",
+        "--location",
+        default=os.environ.get("LOCATION", DEFAULT_LOCATION),
+        help="Location to scan for SKILL.md files (default: %(default)s)",
     )
     parser.add_argument(
-        "--host-skills-root",
-        default=DEFAULT_HOST_SKILLS_ROOT,
-        help="Path written into the YAML (for VM/container use). Defaults to --skills-root.",
-    )
-    parser.add_argument(
-        "--config", "--output",
+        "--config",
+        "--output",
         dest="config",
         default=_default_config_path(),
         help="Output config file path (default: %(default)s)",
     )
     parser.add_argument(
-        "--target-provider", "--provider", "--llm-provider",
+        "--target-provider",
         action="append",
         dest="target_providers",
         default=None,
-        help="Target provider under test. Repeat for multiple providers.",
+        help="Provider under evaluation (e.g. anthropic:claude-sonnet-4-6). Repeat for multiple.",
     )
     parser.add_argument(
-        "--redteam-provider",
-        default=DEFAULT_REDTEAM_PROVIDER,
-        help="Optional attacker/grader provider for redteam generation.",
+        "--attacker-provider",
+        dest="attacker_provider",
+        default=DEFAULT_ATTACKER_PROVIDER,
+        help="Provider used to generate and grade adversarial redteam attacks.",
     )
+
     parser.add_argument(
         "--num-tests",
         type=int,
@@ -127,8 +128,12 @@ def _add_common_args(parser: argparse.ArgumentParser):
 
 
 def _resolve_providers(args) -> list[str]:
-    """Resolve the target provider list from CLI args + env."""
-    raw = args.target_providers if args.target_providers is not None else [DEFAULT_TARGET_PROVIDERS]
+    """Resolve the tested provider list from CLI args + env."""
+    raw = (
+        args.target_providers
+        if args.target_providers is not None
+        else [DEFAULT_TARGET_PROVIDERS]
+    )
     providers = []
     for value in raw:
         providers.extend(parse_csv(value))
@@ -139,15 +144,15 @@ def _resolve_providers(args) -> list[str]:
 
 def _print_header(args, target_providers: list[str], label: str):
     """Print the run header with configuration details."""
-    host_root = args.host_skills_root or args.skills_root
     banner()
     print(f" {BOLD}SkillGuard  ·  {label}{RESET}")
     banner()
-    print(f"  Skills root (discovery) : {CYAN}{args.skills_root}{RESET}")
-    print(f"  Skills root (host/YAML) : {CYAN}{host_root}{RESET}")
+    print(f"  Location                : {CYAN}{args.location}{RESET}")
     print(f"  Config out              : {CYAN}{args.config}{RESET}")
-    print(f"  Target providers        : {CYAN}{', '.join(target_providers)}{RESET}")
-    print(f"  Redteam provider        : {CYAN}{args.redteam_provider or '(default promptfoo attacker/grader)'}{RESET}")
+    print(f"  Tested providers        : {CYAN}{', '.join(target_providers)}{RESET}")
+    print(
+        f"  Attacker provider       : {CYAN}{args.attacker_provider or '(default promptfoo attacker/grader)'}{RESET}"
+    )
     print(f"  Num tests               : {CYAN}{args.num_tests} per skill{RESET}")
     print(f"  Plugin preset           : {CYAN}{args.plugin_preset}{RESET}")
     print(f"  Strategy preset         : {CYAN}{args.strategy_preset}{RESET}")
@@ -155,17 +160,19 @@ def _print_header(args, target_providers: list[str], label: str):
     print()
 
 
-def _run_discovery_pipeline(args, target_providers: list[str]) -> tuple[list[dict], list[dict], int]:
+def _run_discovery_pipeline(
+    args, target_providers: list[str]
+) -> tuple[list[dict], list[dict], int]:
     """Core discovery + static analysis + config generation pipeline.
 
     Returns: (skills, findings, exit_code)
        exit_code: 0 = clean, 2 = critical static findings.
     """
-    host_root = args.host_skills_root or args.skills_root
-
     # ── Discover skills ──────────────────────────────────────────────────
-    print(f"{BOLD}── Discovering skills ───────────────────────────────────────────{RESET}")
-    skills = discover_skills(args.skills_root)
+    print(
+        f"{BOLD}── Discovering skills ───────────────────────────────────────────{RESET}"
+    )
+    skills = discover_skills(args.location)
     total_found = len(skills)
     try:
         skills, duplicates = dedupe_skills(skills, args.dedupe_mode)
@@ -174,14 +181,20 @@ def _run_discovery_pipeline(args, target_providers: list[str]) -> tuple[list[dic
         sys.exit(1)
     print(f"\n  Found {total_found} skill(s); keeping {len(skills)} after dedupe.\n")
     if duplicates:
-        print(f"  ℹ️  Dropped {len(duplicates)} duplicate skill(s) using dedupe mode '{args.dedupe_mode}'.\n")
+        print(
+            f"  ℹ️  Dropped {len(duplicates)} duplicate skill(s) using dedupe mode '{args.dedupe_mode}'.\n"
+        )
 
     # ── Static analysis ──────────────────────────────────────────────────
-    print(f"{BOLD}── Static analysis ──────────────────────────────────────────────{RESET}")
+    print(
+        f"{BOLD}── Static analysis ──────────────────────────────────────────────{RESET}"
+    )
     findings = run_static_analysis(skills)
 
     # ── Generate config ──────────────────────────────────────────────────
-    print(f"{BOLD}── Generating promptfoo config ──────────────────────────────────{RESET}")
+    print(
+        f"{BOLD}── Generating promptfoo config ──────────────────────────────────{RESET}"
+    )
     try:
         plugins = resolve_plugin_set(
             args.plugin_preset,
@@ -204,13 +217,14 @@ def _run_discovery_pipeline(args, target_providers: list[str]) -> tuple[list[dic
         print()
 
     config = build_promptfoo_config(
-        skills, target_providers, args.num_tests,
+        skills,
+        target_providers,
+        args.num_tests,
         plugins=plugins,
         strategies=strategies,
-        redteam_provider=args.redteam_provider or None,
+        attacker_provider=args.attacker_provider or None,
         output_path=args.config,
-        discovery_root=args.skills_root,
-        host_root=host_root,
+        location=args.location,
         plugin_preset=args.plugin_preset,
         strategy_preset=args.strategy_preset,
         dedupe_mode=args.dedupe_mode,
@@ -228,14 +242,17 @@ def _run_discovery_pipeline(args, target_providers: list[str]) -> tuple[list[dic
     critical = [f for f in findings if f["severity"] == "CRITICAL"]
     exit_code = 0
     if critical:
-        print(f"\n  ⚠️   {len(critical)} CRITICAL static finding(s) – review before running redteam!\n",
-              file=sys.stderr)
+        print(
+            f"\n  ⚠️   {len(critical)} CRITICAL static finding(s) – review before running redteam!\n",
+            file=sys.stderr,
+        )
         exit_code = 2
 
     return skills, findings, exit_code
 
 
 # ── Subcommand handlers ──────────────────────────────────────────────────────
+
 
 def cmd_discover(args):
     """Handler for the `discover` subcommand."""
@@ -261,8 +278,8 @@ def cmd_run(args):
     # Preflight
     preflight_checks(
         target_providers=target_providers,
-        redteam_provider=args.redteam_provider,
-        skills_root=args.skills_root,
+        attacker_provider=args.attacker_provider,
+        location=args.location,
         promptfoo_version=args.promptfoo_version,
     )
     print()
@@ -271,7 +288,9 @@ def cmd_run(args):
     _skills, _findings, discover_exit = _run_discovery_pipeline(args, target_providers)
 
     if discover_exit == 2:
-        print(f"\n{YELLOW}[WARN]{RESET} CRITICAL static findings detected. Review static-scan-report.json")
+        print(
+            f"\n{YELLOW}[WARN]{RESET} CRITICAL static findings detected. Review static-scan-report.json"
+        )
         print("       Continuing with redteam run...")
 
     # Run promptfoo
@@ -288,13 +307,15 @@ def cmd_scan(args):
     banner()
     print(f" {BOLD}SkillGuard  ·  Static Security Scan{RESET}")
     banner()
-    print(f"  Skills root : {CYAN}{args.skills_root}{RESET}")
-    print(f"  Dedupe mode : {CYAN}{args.dedupe_mode}{RESET}")
+    print(f"  Location        : {CYAN}{args.location}{RESET}")
+    print(f"  Dedupe mode     : {CYAN}{args.dedupe_mode}{RESET}")
     print()
 
     # Discover
-    print(f"{BOLD}── Discovering skills ───────────────────────────────────────────{RESET}")
-    skills = discover_skills(args.skills_root)
+    print(
+        f"{BOLD}── Discovering skills ───────────────────────────────────────────{RESET}"
+    )
+    skills = discover_skills(args.location)
     total_found = len(skills)
     try:
         skills, duplicates = dedupe_skills(skills, args.dedupe_mode)
@@ -304,7 +325,9 @@ def cmd_scan(args):
     print(f"\n  Found {total_found} skill(s); keeping {len(skills)} after dedupe.\n")
 
     # Scan
-    print(f"{BOLD}── Static analysis ──────────────────────────────────────────────{RESET}")
+    print(
+        f"{BOLD}── Static analysis ──────────────────────────────────────────────{RESET}"
+    )
     findings = run_static_analysis(skills)
 
     # Report
@@ -314,7 +337,9 @@ def cmd_scan(args):
 
     critical = [f for f in findings if f["severity"] == "CRITICAL"]
     if critical:
-        print(f"\n  ⚠️   {len(critical)} CRITICAL finding(s) detected.\n", file=sys.stderr)
+        print(
+            f"\n  ⚠️   {len(critical)} CRITICAL finding(s) detected.\n", file=sys.stderr
+        )
         sys.exit(2)
 
     banner()
@@ -325,7 +350,7 @@ def cmd_scan(args):
 def cmd_eval(args):
     """Handler for the `eval` subcommand — quality evaluation with suggestions."""
     target_provider = args.eval_provider or DEFAULT_PROVIDER
-    grader_provider = args.grader_provider
+    attacker_provider = args.attacker_provider
 
     # Parse dimensions
     if args.dimensions:
@@ -342,10 +367,12 @@ def cmd_eval(args):
     banner()
     print(f" {BOLD}SkillGuard  ·  Quality Evaluation{RESET}")
     banner()
-    print(f"  Skills root     : {CYAN}{args.skills_root}{RESET}")
+    print(f"  Location        : {CYAN}{args.location}{RESET}")
     print(f"  Eval config     : {CYAN}{args.eval_config}{RESET}")
-    print(f"  Provider        : {CYAN}{target_provider}{RESET}")
-    print(f"  Grader provider : {CYAN}{grader_provider or '(same as provider)'}{RESET}")
+    print(f"  Tested provider : {CYAN}{target_provider}{RESET}")
+    print(
+        f"  Grader provider : {CYAN}{attacker_provider or '(same as --target-provider)'}{RESET}"
+    )
     print(f"  Dimensions      : {CYAN}{', '.join(dimensions)}{RESET}")
     print(f"  Dedupe mode     : {CYAN}{args.dedupe_mode}{RESET}")
     print()
@@ -353,16 +380,19 @@ def cmd_eval(args):
     # Preflight
     preflight_checks(
         target_providers=[target_provider],
-        redteam_provider=grader_provider or "",
-        skills_root=args.skills_root,
+        attacker_provider=attacker_provider or "",
+        location=args.location,
         promptfoo_version=args.promptfoo_version,
     )
     print()
 
     # Discover skills
-    from core.discover import discover_skills, dedupe_skills
-    print(f"{BOLD}── Discovering skills ───────────────────────────────────────────{RESET}")
-    skills = discover_skills(args.skills_root)
+    from core.discover import dedupe_skills, discover_skills
+
+    print(
+        f"{BOLD}── Discovering skills ───────────────────────────────────────────{RESET}"
+    )
+    skills = discover_skills(args.location)
     total_found = len(skills)
     try:
         skills, duplicates = dedupe_skills(skills, args.dedupe_mode)
@@ -376,23 +406,28 @@ def cmd_eval(args):
         sys.exit(1)
 
     # Build eval config
-    print(f"{BOLD}── Generating eval config ───────────────────────────────────────{RESET}")
+    print(
+        f"{BOLD}── Generating eval config ───────────────────────────────────────{RESET}"
+    )
     output_dir = str(Path(args.eval_config).parent)
     config = build_eval_config(
         skills=skills,
-        provider=target_provider,
+        target_provider=target_provider,
         num_tests=args.num_tests,
         dimensions=dimensions,
-        grader_provider=grader_provider,
+        attacker_provider=attacker_provider,
         output_dir=output_dir,
     )
 
     from core.discover import write_config
+
     write_config(config, args.eval_config)
 
     # Run promptfoo eval
     results_dir = str(Path(args.eval_config).parent / "results")
-    eval_exit = run_promptfoo_eval(args.eval_config, results_dir, args.promptfoo_version)
+    eval_exit = run_promptfoo_eval(
+        args.eval_config, results_dir, args.promptfoo_version
+    )
 
     sys.exit(eval_exit)
 
@@ -407,6 +442,7 @@ def cmd_view(args):
 
 # ── Main CLI ─────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         prog="skillguard",
@@ -414,14 +450,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
-  skillguard discover --skills-root ~/.claude
+  skillguard discover --location ~/.claude
   skillguard run --target-provider openai:gpt-4o --num-tests 5
-  skillguard scan --skills-root ~/.claude
+  skillguard eval --target-provider anthropic:claude-sonnet-4-6 --attacker-provider openai:gpt-4o
+  skillguard scan --location ~/.claude
   skillguard view
 """,
     )
     parser.add_argument(
-        "-V", "--version",
+        "-V",
+        "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
@@ -475,9 +513,9 @@ examples:
         ),
     )
     eval_parser.add_argument(
-        "--skills-root",
-        default=os.environ.get("SKILLS_ROOT", DEFAULT_SKILLS_ROOT),
-        help="Root directory to scan for SKILL.md files (default: %(default)s)",
+        "--location",
+        default=os.environ.get("LOCATION", DEFAULT_LOCATION),
+        help="Location to scan for SKILL.md files (default: %(default)s)",
     )
     eval_parser.add_argument(
         "--eval-config",
@@ -485,15 +523,16 @@ examples:
         help="Output eval config file path (default: %(default)s)",
     )
     eval_parser.add_argument(
-        "--eval-provider", "--provider",
+        "--target-provider",
         dest="eval_provider",
         default=None,
-        help=f"Target provider for evaluation (default: {DEFAULT_PROVIDER})",
+        help=f"Provider to evaluate (default: {DEFAULT_PROVIDER})",
     )
     eval_parser.add_argument(
-        "--grader-provider",
+        "--attacker-provider",
+        dest="attacker_provider",
         default=None,
-        help="LLM provider for grading (default: same as --eval-provider)",
+        help="Provider used to grade evaluation responses (default: same as --target-provider)",
     )
     eval_parser.add_argument(
         "--num-tests",

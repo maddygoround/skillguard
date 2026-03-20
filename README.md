@@ -64,7 +64,7 @@ skillguard run
 ```
 
 That's it. The command:
-1. Scans every `SKILL.md` recursively under `SKILLS_ROOT`
+1. Scans every `SKILL.md` recursively under `LOCATION`
 2. Runs a static pattern analysis and writes `results/static-scan-report.json`
 3. Deduplicates repeated cached skills by content hash (configurable)
 4. Generates `promptfooconfig.yaml` with Promptfoo plugin/strategy presets
@@ -84,7 +84,7 @@ skillguard --help
 Discover skills, run static analysis, and generate the promptfoo config — without running the actual redteam evaluation.
 
 ```bash
-skillguard discover --skills-root ~/.claude
+skillguard discover --location ~/.claude
 ```
 
 ### `skillguard run`
@@ -93,11 +93,10 @@ Full pipeline: discover → static scan → generate config → run promptfoo re
 
 ```bash
 skillguard run \
-  --skills-root "$HOME/.claude" \
-  --host-skills-root "$HOME/.claude" \
+  --location "$HOME/.claude" \
   --target-provider anthropic:claude-sonnet-4-6 \
   --target-provider openai:chat:gpt-5.4 \
-  --redteam-provider openai:chat:gpt-5-mini \
+  --attacker-provider openai:chat:gpt-5-mini \
   --num-tests 5 \
   --strategy-preset local-balanced
 ```
@@ -107,7 +106,7 @@ skillguard run \
 Static security scan only — no promptfoo invocation.
 
 ```bash
-skillguard scan --skills-root ~/.claude
+skillguard scan --location ~/.claude
 ```
 
 ### `skillguard eval`
@@ -118,16 +117,16 @@ Evaluates each skill across 5 quality dimensions (scope clarity, instruction saf
 
 ```bash
 # Evaluate all skills across all dimensions
-skillguard eval --skills-root ~/.claude
+skillguard eval --location ~/.claude
 
 # Evaluate with a specific provider
-skillguard eval --skills-root ~/.claude --provider openai:gpt-4o
+skillguard eval --location ~/.claude --provider openai:gpt-4o
 
 # Evaluate only specific dimensions
 skillguard eval --dimensions scope_clarity,instruction_safety
 
 # Use a different grader model
-skillguard eval --grader-provider openai:gpt-4o
+skillguard eval --attacker-provider openai:gpt-4o
 ```
 
 Eval-specific options:
@@ -136,7 +135,7 @@ Eval-specific options:
 |---|---|---|
 | `--eval-config PATH` | `./evalconfig.yaml` | Output eval config path |
 | `--eval-provider ID` | `anthropic:claude-sonnet-4-6` | Target provider for evaluation |
-| `--grader-provider ID` | same as `--eval-provider` | LLM provider for grading |
+| `--attacker-provider ID` | same as `--eval-provider` | LLM provider for grading |
 | `--dimensions DIMS` | all | Comma-separated quality dimensions |
 | `--num-tests N` | `5` | Tests per dimension |
 
@@ -156,11 +155,10 @@ All subcommands (`discover`, `run`, `scan`) accept these flags:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--skills-root PATH` | `~/.skills/skills` | Root directory scanned for `SKILL.md` files |
-| `--host-skills-root PATH` | same as `--skills-root` | Path written into config when discovery happens in a different mount/container path |
+| `--location PATH` | `~/.skills/skills` | Location scanned for `SKILL.md` files |
 | `--config PATH` | `./promptfooconfig.yaml` | Output config path |
 | `--target-provider ID` | `anthropic:claude-haiku-4-5-latest` | Provider under test (repeatable) |
-| `--redteam-provider ID` | _(unset)_ | Optional attacker/grader provider |
+| `--attacker-provider ID` | _(unset)_ | Optional attacker/grader provider |
 | `--num-tests N` | `10` | Number of attack probes per skill |
 | `--plugin-preset NAME` | `technical-minimal` | Plugin bundle |
 | `--strategy-preset NAME` | `technical-minimal` | Strategy bundle |
@@ -184,12 +182,11 @@ All CLI flags can also be set via environment variables:
 
 | Variable | Corresponding flag |
 |---|---|
-| `SKILLS_ROOT` | `--skills-root` |
-| `HOST_SKILLS_ROOT` | `--host-skills-root` |
+| `LOCATION` | `--location` |
 | `PROMPTFOO_CONFIG` | `--config` |
 | `TARGET_PROVIDERS` | `--target-provider` (comma-separated) |
 | `LLM_PROVIDER` | `--target-provider` (backward-compatible) |
-| `REDTEAM_PROVIDER` | `--redteam-provider` |
+| `ATTACKER_PROVIDER` | `--attacker-provider` |
 | `NUM_TESTS` | `--num-tests` |
 | `PROMPTFOO_VERSION` | `--promptfoo-version` |
 | `REDTEAM_PLUGIN_PRESET` | `--plugin-preset` |
@@ -258,7 +255,7 @@ Generated at runtime and ignored by git:
 
 ## Adding a new skill
 
-Drop a new folder with a `SKILL.md` anywhere under `SKILLS_ROOT`, then
+Drop a new folder with a `SKILL.md` anywhere under `LOCATION`, then
 re-run `skillguard run`.
 
 The tool **recursively scans** the full skills tree, so nested project
@@ -300,5 +297,5 @@ skillguard run \
   --exclude-plugins competitors,hallucination
 
 # Static scan only (no API calls)
-skillguard scan --skills-root ~/.claude
+skillguard scan --location ~/.claude
 ```

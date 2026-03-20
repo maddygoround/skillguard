@@ -156,11 +156,11 @@ def dedupe_skills(skills: list[dict], mode: str) -> tuple[list[dict], list[dict]
     return deduped, duplicates
 
 
-def discover_skills(skills_root: str) -> list[dict]:
-    """Walk skills_root and return a list of skill metadata dicts."""
-    root = Path(skills_root)
+def discover_skills(location: str) -> list[dict]:
+    """Walk location and return a list of skill metadata dicts."""
+    root = Path(location)
     if not root.exists():
-        print(f"[ERROR] Skills root not found: {root}", file=sys.stderr)
+        print(f"[ERROR] Location not found: {root}", file=sys.stderr)
         sys.exit(1)
 
     skills = []
@@ -192,28 +192,19 @@ def discover_skills(skills_root: str) -> list[dict]:
 
 def build_promptfoo_config(skills: list[dict], target_providers: list[str], num_tests: int,
                            plugins: list[dict], strategies: list[dict],
-                           redteam_provider: str | None,
+                           attacker_provider: str | None,
                            output_path: str,
-                           discovery_root: str = "", host_root: str = "",
+                           location: str = "",
                            plugin_preset: str = "", strategy_preset: str = "",
                            dedupe_mode: str = "off", duplicates: list[dict] | None = None,
                            filtered_strategies: list[dict] | None = None) -> dict:
     """Construct the promptfoo redteam config dict.
 
-    discovery_root  – the path used to find SKILL.md files (may be a VM-internal mount).
-    host_root       – the path written into the YAML; must be valid on the machine that
-                      runs promptfoo (the host/Mac). Defaults to discovery_root.
+    location – the path used to find SKILL.md files.
     """
-    host_root = host_root.rstrip("/") if host_root else discovery_root.rstrip("/")
-    discovery_root = discovery_root.rstrip("/")
+    location = location.rstrip("/")
     duplicates = duplicates or []
     filtered_strategies = filtered_strategies or []
-
-    def host_path(raw_path: str) -> str:
-        """Rewrite a discovery-time path to a host-valid path."""
-        if discovery_root and host_root != discovery_root:
-            raw_path = raw_path.replace(discovery_root, host_root, 1)
-        return raw_path
 
     prompts_dir = Path(output_path).resolve().parent / GENERATED_PROMPTS_DIRNAME
     prompts_dir.mkdir(parents=True, exist_ok=True)
@@ -272,10 +263,10 @@ def build_promptfoo_config(skills: list[dict], target_providers: list[str], num_
         "_meta": {
             "generated_by": "skillguard",
             "generated_at": datetime.utcnow().isoformat() + "Z",
-            "skills_root":  host_root,
+            "location":  location,
             "skill_count":  len(skills),
             "target_providers": target_providers,
-            "redteam_provider": redteam_provider or "",
+            "attacker_provider": attacker_provider or "",
             "plugin_preset": plugin_preset,
             "strategy_preset": strategy_preset,
             "dedupe_mode": dedupe_mode,
@@ -287,15 +278,15 @@ def build_promptfoo_config(skills: list[dict], target_providers: list[str], num_
                 {
                     "id": s["id"],
                     "name": s["name"],
-                    "path": host_path(s["path"]),
+                    "path": s["path"],
                     "prompt_path": prompt_files[s["id"]],
                 }
                 for s in skills
             ],
         },
     }
-    if redteam_provider:
-        config["redteam"]["provider"] = redteam_provider
+    if attacker_provider:
+        config["redteam"]["provider"] = attacker_provider
     return config
 
 

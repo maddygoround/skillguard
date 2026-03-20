@@ -73,7 +73,10 @@ def generate_eval_tests(
                     "analysis_request": (
                         f"Evaluate this skill for '{label}'. "
                         f"Assess whether the skill definition provides clear, "
-                        f"well-structured {label.lower()} guidance."
+                        f"well-structured {label.lower()} guidance. "
+                        f"Specifically, please verify whether the skill incorporates "
+                        f"tool usage constraints and how its context behaves (such as "
+                        f"'context: fork' for isolated sub-agent environments)."
                     ),
                 },
                 "assert": [
@@ -82,7 +85,8 @@ def generate_eval_tests(
                         "value": (
                             f"Evaluate the skill '{skill['name']}' for {label}. "
                             f"The skill should have clear, well-defined "
-                            f"{label.lower()} in its definition."
+                            f"{label.lower()} in its definition, including considerations "
+                            f"for tool usage limitations and environment context isolation (e.g. context: fork)."
                         ),
                     },
                 ],
@@ -97,10 +101,10 @@ def generate_eval_tests(
 
 def build_eval_config(
     skills: list[dict],
-    provider: str,
+    target_provider: str,
     num_tests: int = 5,
     dimensions: list[str] | None = None,
-    grader_provider: str | None = None,
+    attacker_provider: str | None = None,
     output_dir: str = ".",
 ) -> dict:
     """Construct the promptfoo eval config dict for quality evaluation.
@@ -117,9 +121,9 @@ def build_eval_config(
 
     # Default test options
     default_test = {}
-    if grader_provider:
+    if attacker_provider:
         default_test["options"] = {
-            "provider": grader_provider,
+            "provider": attacker_provider,
         }
 
     config = {
@@ -132,8 +136,8 @@ def build_eval_config(
         "prompts": [EVAL_PROMPT_TEMPLATE],
         "providers": [
             {
-                "id": provider,
-                "label": f"provider:{provider}",
+                "id": target_provider,
+                "label": f"provider:{target_provider}",
             }
         ],
         "tests": tests,
@@ -143,8 +147,8 @@ def build_eval_config(
             "skill_count": len(skills),
             "dimensions": dimensions,
             "total_evaluations": total_evals,
-            "provider": provider,
-            "grader_provider": grader_provider or provider,
+            "target_provider": target_provider,
+            "attacker_provider": attacker_provider or target_provider,
             "skills": [
                 {"id": s["id"], "name": s["name"], "path": s["path"]}
                 for s in skills
